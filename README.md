@@ -34,7 +34,7 @@ ii) How it's work
     
 3) After select the menu, press button 'set' to confirm the selection and the LCD will promp the confim selection based on the user has set earlier.
 4) The machine will continue the process until finished.
-5) The door check button will always been pressed to stimulate the door is closed if the button are not press and the machine already works (not during the mode slectin proces) all the activity will imidiately stop working
+5) The door check button will always been pressed to stimulate the door is closed if the button are not press and the machine already works (not during the mode selection process) all the activity will imidiately stop working
 6) The user also can override the working process by press the start/pause/stop button
 
 ////////////////////The Code////////////////////
