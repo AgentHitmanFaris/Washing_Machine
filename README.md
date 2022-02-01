@@ -1,9 +1,12 @@
 # Washing_Machine
 Washing Machine project using PIC16F887 in Proteus and MPLAB
 
+#Update-2/2/2022
+
 ////////////////////Schematic Diagram////////////////////
 
-![image](https://user-images.githubusercontent.com/81744011/151532789-c43ad0b8-f2cf-4763-83c7-7a57b61aadb4.png)
+![image](https://user-images.githubusercontent.com/81744011/151947136-6f0c5864-b8c2-4127-9282-88140494544e.png)
+
 
 ////////////////////Initial Idea////////////////////
 
@@ -37,8 +40,6 @@ ii) How it's work
 5) The door check button will always been pressed to stimulate the door is closed if the button are not press and the machine already works (not during the mode selection process) all the activity will imidiately stop working
 6) The user also can override the working process by press the start/pause/stop button
 
-////////////////////The Code////////////////////
 
--WILL UPDATE SOON-
    
 
