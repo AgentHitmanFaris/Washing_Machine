@@ -24,12 +24,13 @@
 #define _XTAL_FREQ 8000000
 
 // --- Pin Definitions ---
-#define LCD_RS PORTCbits.RC0
-#define LCD_EN PORTCbits.RC1
-#define LCD_D4 PORTDbits.RD0
-#define LCD_D5 PORTDbits.RD1
-#define LCD_D6 PORTDbits.RD2
-#define LCD_D7 PORTDbits.RD3
+// Renamed to match lcd.h requirements
+#define RS PORTCbits.RC0
+#define EN PORTCbits.RC1
+#define D4 PORTDbits.RD0
+#define D5 PORTDbits.RD1
+#define D6 PORTDbits.RD2
+#define D7 PORTDbits.RD3
 
 #define WATER_INLET_MOTOR PORTDbits.RD4
 #define DRUM_SPIN_MOTOR PORTDbits.RD5
@@ -69,6 +70,8 @@ int selected_water_level = 0;
 int selected_wash_time = 0;
 int selected_rinse_time = 0;
 int selected_spin_time = 0;
+
+int display_dirty = 1; // Optimization: Only update LCD when needed
 
 
 // --- Function Prototypes ---
@@ -141,6 +144,7 @@ void handle_button_presses()
                 current_menu++;
             }
             Lcd_Clear();
+            display_dirty = 1;
         }
     }
 
@@ -159,6 +163,7 @@ void handle_button_presses()
              menu_selection++;
           }
           Lcd_Clear();
+          display_dirty = 1;
        }
     }
 
@@ -177,6 +182,7 @@ void handle_button_presses()
              confirm_selection++;
           }
           Lcd_Clear();
+          display_dirty = 1;
        }
     }
 
@@ -195,6 +201,7 @@ void handle_button_presses()
              machine_state = STOPPED;
           }
           Lcd_Clear();
+          display_dirty = 1;
        }
     }
 
@@ -214,6 +221,13 @@ void handle_button_presses()
  */
 void update_display()
 {
+    if (!display_dirty) {
+        return;
+    }
+
+    // Reset dirty flag, but might set it again if we do an auto-transition
+    display_dirty = 0;
+
     // --- Display Menu ---
     switch(current_menu)
     {
@@ -301,6 +315,8 @@ void update_display()
        Lcd_Clear();
        confirm_selection = 0;
        menu_selection = 1;
+       // We just reset the selection, so we need to redraw the main menu immediately/next loop.
+       display_dirty = 1;
     }
 }
 
@@ -329,6 +345,7 @@ void run_washing_cycle()
        __delay_ms(5000);
        Lcd_Clear();
        machine_state = STOPPED;
+       display_dirty = 1; // Restore menu
     }
 }
 
