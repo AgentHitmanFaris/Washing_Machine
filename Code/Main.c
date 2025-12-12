@@ -63,7 +63,7 @@ enum MachineState {
 // --- Global Variables ---
 int menu_selection = 1;
 int confirm_selection = 0;
-enum MachineState machine_state = STOPPED;
+volatile enum MachineState machine_state = STOPPED;
 enum MenuOption current_menu = MODE;
 int selected_mode = 0;
 int selected_water_level = 0;
@@ -79,7 +79,6 @@ void initialize_system();
 void handle_button_presses();
 void update_display();
 void run_washing_cycle();
-void inter();
 
 void main()
 {
@@ -206,14 +205,7 @@ void handle_button_presses()
     }
 
     // --- Door Sensor Button ---
-    if(DOOR_SENSOR_BUTTON == 0)
-    {
-       __delay_ms(200);
-       if(DOOR_SENSOR_BUTTON == 0)
-       {
-           inter();
-       }
-    }
+    // Handled by Interrupt Service Routine (ISR) for immediate safety response
 }
 
 /**
@@ -333,12 +325,18 @@ void run_washing_cycle()
        WATER_INLET_MOTOR = 1;
        __delay_ms(1000);
        WATER_INLET_MOTOR = 0;
+
+       if (machine_state != RUNNING) return; // Safety check
+
        Lcd_Set_Cursor(1,1);
        Lcd_Write_String(" ");
        Lcd_Write_String("Washing");
        DRUM_SPIN_MOTOR = 1;
        __delay_ms(3000);
        DRUM_SPIN_MOTOR = 0;
+
+       if (machine_state != RUNNING) return; // Safety check
+
        Lcd_Set_Cursor(1,1);
        Lcd_Write_String(" ");
        Lcd_Write_String("Finished");
@@ -350,11 +348,17 @@ void run_washing_cycle()
 }
 
 /**
- * @brief Interrupt service routine for the door sensor.
+ * @brief Interrupt service routine for the door sensor (Safety Stop).
  */
-void inter()
+void __interrupt() isr(void)
 {
-    WATER_INLET_MOTOR = 0;
-    DRUM_SPIN_MOTOR = 0;
-    INTCONbits.INTF = 0;
+    if (INTCONbits.INTF)
+    {
+        // Emergency Stop
+        WATER_INLET_MOTOR = 0;
+        DRUM_SPIN_MOTOR = 0;
+        machine_state = STOPPED;
+        display_dirty = 1; // Update display on next loop
+        INTCONbits.INTF = 0; // Clear interrupt flag
+    }
 }
