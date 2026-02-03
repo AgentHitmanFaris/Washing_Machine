@@ -1,30 +1,28 @@
 /*
  * Author: Agent_Hitman_Faris
+ * Refactored by: Red Team Auditor (Jules)
  *
- * Created with love
+ * Description: SOTA Washing Machine Controller for PIC16F887
  */
 
 // --- PIC16F887 Configuration ---
-#pragma config FOSC = INTRC_NOCLKOUT// Oscillator Selection bits (INTOSCIO oscillator: I/O function on RA6/OSC2/CLKOUT pin, I/O function on RA7/OSC1/CLKIN)
-#pragma config WDTE = OFF       // Watchdog Timer Enable bit (WDT disabled and can be enabled by SWDTEN bit of the WDTCON register)
-#pragma config PWRTE = ON       // Power-up Timer Enable bit (PWRT enabled)
-#pragma config MCLRE = OFF      // RE3/MCLR pin function select bit (RE3/MCLR pin function is digital input, MCLR internally tied to VDD)
-#pragma config CP = OFF         // Code Protection bit (Program memory code protection is disabled)
-#pragma config CPD = OFF        // Data Code Protection bit (Data memory code protection is disabled)
-#pragma config BOREN = ON       // Brown Out Reset Selection bits (BOR enabled)
-#pragma config IESO = ON        // Internal External Switchover bit (Internal/External Switchover mode is enabled)
-#pragma config FCMEN = ON       // Fail-Safe Clock Monitor Enabled bit (Fail-Safe Clock Monitor is enabled)
-#pragma config LVP = OFF        // Low Voltage Programming Enable bit (RB3 pin has digital I/O, HV on MCLR must be used for programming)
+#pragma config FOSC = INTRC_NOCLKOUT
+#pragma config WDTE = OFF
+#pragma config PWRTE = ON
+#pragma config MCLRE = OFF
+#pragma config CP = OFF
+#pragma config CPD = OFF
+#pragma config BOREN = ON
+#pragma config IESO = ON
+#pragma config FCMEN = ON
+#pragma config LVP = OFF
 
-// CONFIG2
-#pragma config BOR4V = BOR40V   // Brown-out Reset Selection bit (Brown-out Reset set to 4.0V)
-#pragma config WRT = OFF        // Flash Program Memory Self Write Enable bits (Write protection off)
-
+#pragma config BOR4V = BOR40V
+#pragma config WRT = OFF
 
 #define _XTAL_FREQ 8000000
 
-// --- Pin Definitions ---
-// Renamed to match lcd.h requirements
+// --- Pin Mapping ---
 #define RS PORTCbits.RC0
 #define EN PORTCbits.RC1
 #define D4 PORTDbits.RD0
@@ -32,333 +30,306 @@
 #define D6 PORTDbits.RD2
 #define D7 PORTDbits.RD3
 
-#define WATER_INLET_MOTOR PORTDbits.RD4
-#define DRUM_SPIN_MOTOR PORTDbits.RD5
+#define MOTOR_INLET   PORTDbits.RD4
+#define MOTOR_DRUM    PORTDbits.RD5
 
-#define DOOR_SENSOR_BUTTON PORTBbits.RB0
-#define MENU_BUTTON PORTBbits.RB1
-#define SELECT_BUTTON PORTBbits.RB2
-#define CONFIRM_BUTTON PORTBbits.RB3
-#define START_STOP_BUTTON PORTBbits.RB4
+// Active Low Buttons
+#define BTN_DOOR      PORTBbits.RB0
+#define BTN_MENU      PORTBbits.RB1
+#define BTN_SELECT    PORTBbits.RB2
+#define BTN_CONFIRM   PORTBbits.RB3
+#define BTN_STARTSTOP PORTBbits.RB4
 
-#include <stdlib.h>
-#include <stdio.h> //header file for sprintf
 #include <xc.h>
+#include <stdio.h>
 #include "lcd.h"
 
-// --- Enums for better readability ---
-enum MenuOption {
-    MODE = 2,
-    WATER_LEVEL = 3,
-    WASH_TIME = 4,
-    RINSE = 5,
-    SPIN = 6
+// --- Constants & Types ---
+typedef enum {
+    STATE_IDLE,
+    STATE_MENU_MODE,
+    STATE_MENU_LEVEL,
+    STATE_FILLING,
+    STATE_WASHING,
+    STATE_RINSING,
+    STATE_SPINNING,
+    STATE_DRAINING,
+    STATE_COMPLETE,
+    STATE_PAUSED,
+    STATE_ERROR
+} MachineState;
+
+typedef enum {
+    MODE_NORMAL,
+    MODE_QUICK,
+    MODE_HEAVY
+} WashMode;
+
+typedef struct {
+    uint8_t wash_time_sec;
+    uint8_t rinse_count;
+    uint8_t spin_time_sec;
+    char *name;
+} WashProfile;
+
+// --- Globals ---
+volatile MachineState current_state = STATE_IDLE;
+volatile MachineState previous_state = STATE_IDLE;
+volatile uint8_t door_open_detected = 0;
+
+WashMode selected_mode = MODE_NORMAL;
+uint8_t selected_water_level = 2; // 1=Low, 2=Med, 3=High
+
+// SOTA Profiles
+const WashProfile profiles[3] = {
+    {10, 2, 5, "Normal"}, // Reduced times for simulation
+    {5,  1, 3, "Quick "},
+    {15, 3, 8, "Heavy "}
 };
-
-enum MachineState {
-    STOPPED,
-    RUNNING
-};
-
-// --- Global Variables ---
-int menu_selection = 1;
-int confirm_selection = 0;
-volatile enum MachineState machine_state = STOPPED;
-enum MenuOption current_menu = MODE;
-int selected_mode = 0;
-int selected_water_level = 0;
-int selected_wash_time = 0;
-int selected_rinse_time = 0;
-int selected_spin_time = 0;
-
-int display_dirty = 1; // Optimization: Only update LCD when needed
-
 
 // --- Function Prototypes ---
-void initialize_system();
-void handle_button_presses();
-void update_display();
-void run_washing_cycle();
+void System_Init(void);
+void Update_Display(void);
+void Handle_Inputs(void);
+void Run_FSM(void);
+void Error_Handler(void);
+void __interrupt() isr(void);
 
-void main()
-{
-    initialize_system();
+// --- Main Application ---
+void main(void) {
+    System_Init();
 
-    while(1)
-    {
-        handle_button_presses();
-        update_display();
-        run_washing_cycle();
-    }
-}
-
-/**
- * @brief Initializes all the necessary hardware components for the washing machine.
- */
-void initialize_system()
-{
-    // --- Port Configuration ---
-    ANSEL = 0x00;
-    TRISC = 0x00;
-    TRISD = 0x00;
-    ANSELH = 0x00;
-    TRISB = 0xFF; // Set PORTB as input for buttons
-    OSCCON = 0x71; // Configure internal oscillator
-    PORTA = 0x00;
-    PORTB = 0xFF;
-    PORTC = 0x00;
-    PORTD = 0x00;
-
-    // --- Motor Initialization ---
-    WATER_INLET_MOTOR = 0;
-    DRUM_SPIN_MOTOR = 0;
-
-    // --- Interrupt Configuration ---
-    INTCONbits.INTE =1;
-    INTCONbits.GIE =1;
-    OPTION_REGbits.INTEDG = 0;
-
-    // --- LCD Initialization ---
-    Lcd_Init();
     Lcd_Clear();
+    Lcd_Set_Cursor(1,1);
+    Lcd_Write_String("System Boot...");
+    __delay_ms(1000);
+    Lcd_Clear();
+
+    current_state = STATE_IDLE;
+
+    while(1) {
+        Handle_Inputs();
+        Run_FSM();
+        // Small delay to prevent CPU hogging in simulation and allow LCD to stabilize
+        __delay_ms(50);
+    }
 }
 
-/**
- * @brief Handles all the button presses from the user.
- */
-void handle_button_presses()
-{
-    // --- Menu Button ---
-    if(MENU_BUTTON == 0)
-    {
-        __delay_ms(200);
-        if(MENU_BUTTON == 0)
-        {
-            if(current_menu >= SPIN)
-            {
-                current_menu = MODE;
-            }
-            else
-            {
-                current_menu++;
-            }
-            Lcd_Clear();
-            display_dirty = 1;
+void System_Init(void) {
+    // Port Configuration
+    TRISB = 0xFF; // PORTB as Input (Buttons)
+    TRISD = 0x00; // PORTD as Output (LCD + Motors)
+    TRISC = 0x00; // PORTC as Output (LCD Control)
+
+    PORTD = 0x00;
+    PORTC = 0x00;
+
+    // ADC Off
+    ANSEL = 0x00;
+    ANSELH = 0x00;
+
+    // Interrupt Configuration
+    INTCONbits.GIE = 1;  // Global Interrupt Enable
+    INTCONbits.INTE = 1; // External Interrupt Enable (RB0/Door)
+    OPTION_REGbits.INTEDG = 0; // Falling edge for RB0
+
+    Lcd_Init();
+}
+
+void __interrupt() isr(void) {
+    if (INTCONbits.INTF) {
+        // Door Sensor Triggered
+        MOTOR_INLET = 0;
+        MOTOR_DRUM = 0;
+
+        if (current_state != STATE_IDLE && current_state != STATE_ERROR) {
+            previous_state = current_state;
+            current_state = STATE_ERROR;
+            door_open_detected = 1;
         }
-    }
 
-    // --- Select Button ---
-    if(SELECT_BUTTON == 0)
-    {
-       __delay_ms(200);
-       if(SELECT_BUTTON == 0)
-       {
-          if(menu_selection > 3) // Assuming max 3 options per menu
-          {
-             menu_selection = 1;
-          }
-          else
-          {
-             menu_selection++;
-          }
-          Lcd_Clear();
-          display_dirty = 1;
-       }
+        INTCONbits.INTF = 0;
     }
-
-    // --- Confirm Button ---
-    if(CONFIRM_BUTTON == 0)
-    {
-       __delay_ms(200);
-       if(CONFIRM_BUTTON == 0)
-       {
-          if(confirm_selection > 1)
-          {
-             confirm_selection = 0;
-          }
-          else
-          {
-             confirm_selection++;
-          }
-          Lcd_Clear();
-          display_dirty = 1;
-       }
-    }
-
-    // --- Start/Stop Button ---
-    if(START_STOP_BUTTON == 0)
-    {
-       __delay_ms(200);
-       if(START_STOP_BUTTON == 0)
-       {
-          if(machine_state == STOPPED)
-          {
-             machine_state = RUNNING;
-          }
-          else
-          {
-             machine_state = STOPPED;
-          }
-          Lcd_Clear();
-          display_dirty = 1;
-       }
-    }
-
-    // --- Door Sensor Button ---
-    // Handled by Interrupt Service Routine (ISR) for immediate safety response
 }
 
-/**
- * @brief Updates the LCD display based on the current menu and selections.
- */
-void update_display()
-{
-    if (!display_dirty) {
+void Handle_Inputs(void) {
+    // Debounce Delay inside button checks if needed, but keeping it simple for FSM
+
+    if (current_state == STATE_ERROR) {
+        if (BTN_STARTSTOP == 0) {
+            __delay_ms(200);
+            if (door_open_detected) {
+                door_open_detected = 0;
+                current_state = STATE_IDLE; // Reset to IDLE
+            }
+        }
         return;
     }
 
-    // Reset dirty flag, but might set it again if we do an auto-transition
-    display_dirty = 0;
+    if (current_state == STATE_IDLE || current_state == STATE_MENU_MODE || current_state == STATE_MENU_LEVEL) {
+        if (BTN_MENU == 0) {
+            __delay_ms(200);
+            if (current_state == STATE_IDLE) current_state = STATE_MENU_MODE;
+            else if (current_state == STATE_MENU_MODE) current_state = STATE_MENU_LEVEL;
+            else current_state = STATE_IDLE;
+            Lcd_Clear();
+        }
 
-    // --- Display Menu ---
-    switch(current_menu)
-    {
-       case MODE:
-           Lcd_Set_Cursor(1,6);
-           Lcd_Write_String("Mode");
-           break;
-       case WATER_LEVEL:
-           Lcd_Set_Cursor(1,1);
-           Lcd_Write_String("Water Level");
-           break;
-       case WASH_TIME:
-           Lcd_Set_Cursor(1,3);
-           Lcd_Write_String("Wash Time");
-           break;
-       case RINSE:
-           Lcd_Set_Cursor(1,5);
-           Lcd_Write_String("Rinse");
-           break;
-       case SPIN:
-           Lcd_Set_Cursor(1,6);
-           Lcd_Write_String("Spin");
-           break;
+        if (BTN_SELECT == 0) {
+            __delay_ms(200);
+            if (current_state == STATE_MENU_MODE) {
+                selected_mode++;
+                if (selected_mode > MODE_HEAVY) selected_mode = MODE_NORMAL;
+            } else if (current_state == STATE_MENU_LEVEL) {
+                selected_water_level++;
+                if (selected_water_level > 3) selected_water_level = 1;
+            }
+        }
     }
 
-    // --- Display Submenu Options ---
-    if(confirm_selection == 1)
-    {
-       if(current_menu == WATER_LEVEL)
-       {
-           Lcd_Set_Cursor(1,1);
-           Lcd_Write_String("Water Level");
-           switch(menu_selection)
-           {
-               case 1:
-                    Lcd_Set_Cursor(2,7);
-                    Lcd_Write_String("Low");
-                    selected_water_level=1;
-                    break;
-               case 2:
-                   Lcd_Set_Cursor(2,3);
-                   Lcd_Write_String("Medium");
-                   selected_water_level=2;
-                   break;
-               case 3:
-                   Lcd_Set_Cursor(2,6);
-                   Lcd_Write_String("High");
-                   selected_water_level=3;
-                   break;
-           }
-       }
-
-       if(current_menu == MODE)
-       {
-           Lcd_Set_Cursor(1,6);
-           Lcd_Write_String("Mode");
-           switch(menu_selection)
-           {
-               case 1:
-                    Lcd_Set_Cursor(2,6);
-                    Lcd_Write_String("Normal");
-                    selected_mode=1;
-                    break;
-               case 2:
-                   Lcd_Set_Cursor(2,6);
-                   Lcd_Write_String("Quick");
-                   selected_mode=2;
-                   break;
-               case 3:
-                   Lcd_Set_Cursor(2,6);
-                   Lcd_Write_String("Rinse");
-                   selected_mode=3;
-                   break;
-           }
-       }
+    if (BTN_CONFIRM == 0 && (current_state == STATE_MENU_MODE || current_state == STATE_MENU_LEVEL)) {
+        __delay_ms(200);
+        current_state = STATE_IDLE;
+        Lcd_Clear();
+        Lcd_Set_Cursor(1,1);
+        Lcd_Write_String("Settings Saved");
+        __delay_ms(1000);
+        Lcd_Clear();
     }
 
-    // --- Confirm Selection ---
-    if(confirm_selection == 2)
-    {
-       Lcd_Clear();
-       Lcd_Set_Cursor(1,7);
-       Lcd_Write_String("Set");
-       __delay_ms(1000);
-       Lcd_Clear();
-       confirm_selection = 0;
-       menu_selection = 1;
-       // We just reset the selection, so we need to redraw the main menu immediately/next loop.
-       display_dirty = 1;
+    if (BTN_STARTSTOP == 0) {
+        __delay_ms(200);
+        if (current_state == STATE_IDLE) {
+            current_state = STATE_FILLING;
+            Lcd_Clear();
+        } else if (current_state == STATE_PAUSED) {
+            current_state = previous_state;
+        } else if (current_state > STATE_IDLE && current_state < STATE_COMPLETE) {
+            previous_state = current_state;
+            current_state = STATE_PAUSED;
+        }
     }
 }
 
-/**
- * @brief Runs the washing cycle based on the user's selections.
- */
-void run_washing_cycle()
-{
-    if(machine_state == RUNNING && selected_mode == 1) // Normal Mode
-    {
-       Lcd_Clear();
-       Lcd_Set_Cursor(1,1);
-       Lcd_Write_String("Water In");
-       WATER_INLET_MOTOR = 1;
-       __delay_ms(1000);
-       WATER_INLET_MOTOR = 0;
+// Helper for non-blocking delays with State checks
+void Wait_With_Check(uint16_t milliseconds) {
+    uint16_t i;
+    for(i=0; i<milliseconds/10; i++) {
+        __delay_ms(10);
 
-       if (machine_state != RUNNING) return; // Safety check
+        // Poll for Pause (Start/Stop Button)
+        if (BTN_STARTSTOP == 0) {
+             __delay_ms(20); // Debounce
+             if (BTN_STARTSTOP == 0) {
+                 if (current_state != STATE_ERROR && current_state != STATE_PAUSED) {
+                     previous_state = current_state;
+                     current_state = STATE_PAUSED;
+                     // Wait for release to avoid immediate toggle in Handle_Inputs
+                     while(BTN_STARTSTOP == 0);
+                 }
+                 return;
+             }
+        }
 
-       Lcd_Set_Cursor(1,1);
-       Lcd_Write_String(" ");
-       Lcd_Write_String("Washing");
-       DRUM_SPIN_MOTOR = 1;
-       __delay_ms(3000);
-       DRUM_SPIN_MOTOR = 0;
-
-       if (machine_state != RUNNING) return; // Safety check
-
-       Lcd_Set_Cursor(1,1);
-       Lcd_Write_String(" ");
-       Lcd_Write_String("Finished");
-       __delay_ms(5000);
-       Lcd_Clear();
-       machine_state = STOPPED;
-       display_dirty = 1; // Restore menu
+        if (current_state == STATE_ERROR) return;
     }
 }
 
-/**
- * @brief Interrupt service routine for the door sensor (Safety Stop).
- */
-void __interrupt() isr(void)
-{
-    if (INTCONbits.INTF)
-    {
-        // Emergency Stop
-        WATER_INLET_MOTOR = 0;
-        DRUM_SPIN_MOTOR = 0;
-        machine_state = STOPPED;
-        display_dirty = 1; // Update display on next loop
-        INTCONbits.INTF = 0; // Clear interrupt flag
+void Run_FSM(void) {
+    char buffer[17];
+
+    switch (current_state) {
+        case STATE_IDLE:
+            Lcd_Set_Cursor(1,1);
+            Lcd_Write_String("Ready: ");
+            Lcd_Write_String(profiles[selected_mode].name);
+            Lcd_Set_Cursor(2,1);
+            sprintf(buffer, "Lvl:%d Press Start", selected_water_level);
+            Lcd_Write_String(buffer);
+            break;
+
+        case STATE_MENU_MODE:
+            Lcd_Set_Cursor(1,1);
+            Lcd_Write_String("Select Mode:");
+            Lcd_Set_Cursor(2,1);
+            Lcd_Write_String(profiles[selected_mode].name);
+            break;
+
+        case STATE_MENU_LEVEL:
+            Lcd_Set_Cursor(1,1);
+            Lcd_Write_String("Water Level:");
+            Lcd_Set_Cursor(2,1);
+            if(selected_water_level==1) Lcd_Write_String("Low");
+            else if(selected_water_level==2) Lcd_Write_String("Medium");
+            else Lcd_Write_String("High");
+            break;
+
+        case STATE_FILLING:
+            Lcd_Set_Cursor(1,1);
+            Lcd_Write_String("Filling Water...");
+            MOTOR_INLET = 1;
+            Wait_With_Check(2000); // Simulate fill time
+            MOTOR_INLET = 0;
+            if (current_state != STATE_ERROR && current_state != STATE_PAUSED)
+                current_state = STATE_WASHING;
+            break;
+
+        case STATE_WASHING:
+            Lcd_Set_Cursor(1,1);
+            Lcd_Write_String("Washing...");
+            MOTOR_DRUM = 1;
+            Wait_With_Check(profiles[selected_mode].wash_time_sec * 100); // Scale for sim
+            MOTOR_DRUM = 0;
+            if (current_state != STATE_ERROR && current_state != STATE_PAUSED)
+                current_state = STATE_RINSING;
+            break;
+
+        case STATE_RINSING:
+            Lcd_Set_Cursor(1,1);
+            Lcd_Write_String("Rinsing...");
+            MOTOR_INLET = 1;
+            Wait_With_Check(1000);
+            MOTOR_INLET = 0;
+            MOTOR_DRUM = 1;
+            Wait_With_Check(1000);
+            MOTOR_DRUM = 0;
+            if (current_state != STATE_ERROR && current_state != STATE_PAUSED)
+                current_state = STATE_SPINNING;
+            break;
+
+        case STATE_SPINNING:
+            Lcd_Set_Cursor(1,1);
+            Lcd_Write_String("Spinning...");
+            MOTOR_DRUM = 1;
+            Wait_With_Check(profiles[selected_mode].spin_time_sec * 100);
+            MOTOR_DRUM = 0;
+            if (current_state != STATE_ERROR && current_state != STATE_PAUSED)
+                current_state = STATE_COMPLETE;
+            break;
+
+        case STATE_COMPLETE:
+            Lcd_Clear();
+            Lcd_Set_Cursor(1,1);
+            Lcd_Write_String("Cycle Complete");
+            Lcd_Set_Cursor(2,1);
+            Lcd_Write_String("Remove Clothes");
+            __delay_ms(3000);
+            current_state = STATE_IDLE;
+            Lcd_Clear();
+            break;
+
+        case STATE_PAUSED:
+            Lcd_Set_Cursor(1,1);
+            Lcd_Write_String("PAUSED");
+            MOTOR_INLET = 0;
+            MOTOR_DRUM = 0;
+            break;
+
+        case STATE_ERROR:
+            Lcd_Set_Cursor(1,1);
+            Lcd_Write_String("ERROR: DOOR OPEN");
+            Lcd_Set_Cursor(2,1);
+            Lcd_Write_String("Close & Restart");
+            break;
     }
 }
